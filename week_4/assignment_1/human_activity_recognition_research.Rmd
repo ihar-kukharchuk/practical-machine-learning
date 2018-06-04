@@ -1,0 +1,186 @@
+---
+title: "Human Activity Recognition Research"
+author: "Ihar Kukharchuk"
+date: "June 03, 2018"
+output:
+  pdf_document: default
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include = FALSE}
+library(knitr)
+library(ggplot2)
+
+library(caret)
+library(rpart)
+library(e1071)
+library(randomForest)
+
+## just to force appropriate 'locale'
+Sys.setlocale(category = "LC_ALL", locale = "C")
+
+## configure plots template: size and location
+knitr::opts_template$set(plots = list(fig.align = 'center',
+                                      fig.height = 3,
+                                      fig.width = 7,
+                                      fig.path = 'figures/',
+                                      dev = 'png'))
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Overview
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible
+to collect a large amount of data about personal activity relatively
+inexpensively. These type of devices are part of the quantified self movement -
+a group of enthusiasts who take measurements about themselves regularly to
+improve their health, to find patterns in their behavior, or because they are
+tech geeks. One thing that people regularly do is quantify how much of a
+particular activity they do, but they rarely quantify how well they do it.
+
+This paper includes creation model algorithm, which predicts the way how
+physical exercise has being done based on information from accelerometers.
+
+### Exploratory Analysis
+
+This paper is using [Human Activity Recognition][1] source for obtaining and
+analysing [training][2] and [testing][3] data. This data includes "Unilateral
+Dumbbell Biceps Curl" exercise, performed by participants in 1 set of 10
+repetitions using different fashions, located in column with name = "classe":
+
+* exactly according to the specification (Class A)
+* throwing the elbows to the front (Class B)
+* lifting the dumbbell only halfway (Class C)
+* lowering the dumbbell only halfway (Class D)
+* throwing the hips to the front (Class E)
+
+```{r obtain-data, include = FALSE}
+obtain_data <- function(file_name, url_location) {
+        data_dir_name <- "data"
+        dir.create(data_dir_name, showWarnings = FALSE)
+        file_path <- file.path(data_dir_name, file_name)
+        if (!file.exists(file_path)) {
+                download.file(url_location, file_path, method = "auto")
+        }
+        if (!file.exists(file_path)) {
+                stop("human activity recognition data is unavailable, stop")
+        }
+        read.csv(file_path, na.strings = c("NA","#DIV/0!", ""))
+}
+
+har.train_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+har.test_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+har.train <- obtain_data("pml-training.csv", har.train_url)
+har.test <- obtain_data("pml-testing.csv", har.test_url)
+```
+
+The 'train' part of data has a chart in Appendix A:
+
+* the biggest amount of data in 'train' dataset has type A (5k+)
+* the smallest amount of data in 'train' dataset has type D (near 3k)
+
+### Building Prediction Model
+
+The target to predict is 'classe' which is factor variable. The best choises
+to predict this value among models are 'Decision Tree' and 'Random Forest'.
+Both models are considered in this paper, expected out-of-sample error is based
+on accuracy (1 - accuracy).
+
+#### Prepare Data
+
+The data preparation phase includes the following steps:
+
+* remove columns which doesn't apply to current research: 'X', 'user_name',
+'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 'new_window',
+'num_window')
+* remove all columns, containing more than 80% of NAs
+* check that all chosen columns aren't 'zeroVar' or 'nzv'
+* prepare train(80%)/test(20%) data for cross-validation procedure
+
+```{r}
+set.seed(0)
+
+prepare <- function(dataset) {
+        ds <- dataset[, -c(1:7)]
+        ds[, colSums(is.na(ds)) / nrow(ds) < 0.2]
+}
+train <- prepare(har.train)
+nzv <- nearZeroVar(train, saveMetrics = TRUE)
+sum(nzv$zeroVar)
+sum(nzv$nzv)
+```
+
+Based on information after calling 'nearZeroVar' function we assume that data
+preparation stage was completed. For building model 53 features were selected.
+
+```{r}
+data_subset <- createDataPartition(y = train$classe, p = 0.80, list = FALSE)
+partition.train <- train[data_subset, ]
+partition.test <- train[-data_subset, ]
+```
+
+#### Decision Tree
+```{r}
+dt.model <- rpart(classe ~ ., data = partition.train, method = "class")
+dt.prediction <- predict(dt.model, partition.test, type = "class")
+dt.conf_matrix <- confusionMatrix(dt.prediction, partition.test$classe)
+dt.conf_matrix$overall
+```
+
+#### Random Forest
+
+```{r}
+rf.model <- randomForest(classe ~ ., data = partition.train, method = "class")
+rf.prediction <- predict(rf.model, partition.test, type = "class")
+rf.conf_matrix <- confusionMatrix(rf.prediction, partition.test$classe)
+rf.conf_matrix$overall
+```
+
+#### Decision Tree vs Random Forest Comparison
+
+```{r, echo = FALSE}
+df <- data.frame(c("Decision Tree", "Random Forest"),
+                 c(dt.conf_matrix$overall["Accuracy"],
+                   rf.conf_matrix$overall["Accuracy"]),
+                 c(dt.conf_matrix$overall["AccuracyLower"],
+                   rf.conf_matrix$overall["AccuracyLower"]),
+                 c(dt.conf_matrix$overall["AccuracyUpper"],
+                   rf.conf_matrix$overall["AccuracyUpper"]))
+colnames(df) <- c("model", "accuracy", "conf.int.left", "conf.int.right")
+kable(df, align = 'c')
+```
+
+The model based on Random Forest algorithm has higher accuracy (99.46% vs
+72.95%), thus, has smaller error. Therefore, the model based on Random Forest
+has been chosen.
+
+#### Final Test Data Prediction
+
+```{r}
+predict(rf.model, prepare(har.test), type = "class")
+```
+
+### Summary
+
+According to the research in paper, the model which is based on Random Forest
+algorithm fits the necessity to predict type/way of physical activity with
+accuracy 99.46%.
+
+### Appendix A: Human Activity Recognition Types Plot
+
+```{r har-plot, opts.label = 'plots'}
+har_plot <- ggplot(har.train, aes(classe)) +
+        geom_bar() +
+        xlab("type") +
+        ylab("frequency") +
+        ggtitle("Different Ways of Performing 'Unilateral Dumbbell Biceps Curl'") +
+        theme(plot.title = element_text(hjust = 0.5))
+har_plot
+```
+
+[1]: http://groupware.les.inf.puc-rio.br/har 
+[2]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+[3]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
